@@ -1,0 +1,80 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper functions ───────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // ─── users ──────────────────────────────────────────
+    // Document ID = Firebase Auth UID
+    // - Any signed-in user can READ any user profile (needed for matchmaking peer cards)
+    // - A user can only CREATE their own profile (doc ID must match their UID)
+    // - A user can only UPDATE their own profile
+    // - uid, credits, and role are immutable on update (prevents self-escalation)
+    match /users/{userId} {
+      allow read: if isSignedIn();
+
+      allow create: if isOwner(userId)
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'credits', 'role', 'createdAt']);
+
+      allow update: if isOwner(userId)
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.credits == resource.data.credits
+                    && request.resource.data.role == resource.data.role;
+    }
+
+    // ─── sessions ───────────────────────────────────────
+    // - Any signed-in user can read sessions (live session board & workspace)
+    // - Only a signed-in user can create; learnerId must equal their UID
+    // - Only the mentor or learner of a session can update it
+    // - Sessions cannot be deleted from the client
+    match /sessions/{sessionId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+                    && request.resource.data.learnerId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['mentorId', 'learnerId', 'skill', 'status', 'duration', 'createdAt']);
+
+      allow update: if isSignedIn()
+                    && (resource.data.mentorId == request.auth.uid
+                        || resource.data.learnerId == request.auth.uid);
+    }
+
+    // ─── messages ───────────────────────────────────────
+    // - Only the sender or receiver can read a message
+    // - Any signed-in user can create; senderId must be their own UID (no impersonation)
+    // - Messages cannot be updated or deleted from the client
+    match /messages/{messageId} {
+      allow read: if isSignedIn()
+                  && (resource.data.senderId == request.auth.uid
+                      || resource.data.receiverId == request.auth.uid);
+
+      allow create: if isSignedIn()
+                    && request.resource.data.senderId == request.auth.uid
+                    && request.resource.data.keys().hasAll(['senderId', 'receiverId', 'content', 'type', 'timestamp']);
+    }
+
+    // ─── sprintGroups ───────────────────────────────────
+    // - Anyone signed in can read all squads (explore page)
+    // - Creator's UID must be in the initial members list
+    // - Any signed-in user can update (needed for joining via arrayUnion)
+    // - Squads cannot be deleted from the client
+    match /sprintGroups/{squadId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+                    && request.resource.data.members.hasAny([request.auth.uid])
+                    && request.resource.data.keys().hasAll(['name', 'goal', 'members', 'createdAt']);
+
+      allow update: if isSignedIn();
+    }
+  }
+}
